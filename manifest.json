@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Oscar Partner Screening",
+  "version": "2.3",
+  "description": "AI-assisted background screening for Oscar partner profiles",
+  "permissions": [
+    "activeTab"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:5005/*",
+    "http://localhost:5005/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://admin.oscar-app.com/partner/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
+    }
+  ]
+}
