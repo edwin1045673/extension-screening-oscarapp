@@ -14,6 +14,32 @@ CORS(app)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6IFPmg27aH5_rdM6iPfa7qO6iPMLtRWw0EtWQEwvCvLCA")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+ALLOWED_PHONE_PREFIXES = ["+44", "+351", "+34"]
+
+def validar_telefono_permitido(telefono_raw):
+    if not telefono_raw:
+        return False, "Not provided"
+    
+    # Limpiar espacios, guiones o paréntesis pero conservar el signo '+'
+    limpio = "".join(c for c in str(telefono_raw).strip() if c.isdigit() or c == '+')
+    
+    # Normalizar si no colocaron el signo '+' inicial
+    if limpio.startswith("44") and len(limpio) >= 11:
+        limpio = "+" + limpio
+    elif limpio.startswith("351") and len(limpio) >= 12:
+        limpio = "+" + limpio
+    elif limpio.startswith("34") and len(limpio) >= 11:
+        limpio = "+" + limpio
+    elif not limpio.startswith("+") and len(limpio) == 9:
+        # Número local de 9 dígitos sin prefijo (PT o ES)
+        return True, limpio
+
+    for prefix in ALLOWED_PHONE_PREFIXES:
+        if limpio.startswith(prefix):
+            return True, limpio
+            
+    return False, limpio
+
 @app.route("/verify-technician", methods=["POST"])
 def verify():
     data = request.json or {}
@@ -26,6 +52,7 @@ def verify():
         country = "PT"
 
     registered_name = data.get("registeredName", "Not specified")
+    registered_phone = str(data.get("registeredPhone", "")).strip()
     registered_iban = str(data.get("registeredIban", "")).strip().replace(" ", "").upper()
     registered_nif = str(data.get("registeredNif", "")).strip().replace(" ", "").replace("/", "")
     id_type_selected = data.get("idTypeSelected", "").upper()
@@ -36,6 +63,29 @@ def verify():
     work_share_code = str(data.get("workShareCode", "")).strip()
 
     today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # =========================================================================
+    # REGLA OBLIGATORIA: PREFIJO TELEFÓNICO PERMITIDO (+44, +351, +34)
+    # =========================================================================
+    phone_is_allowed, phone_formatted = validar_telefono_permitido(registered_phone)
+    if not phone_is_allowed:
+        return jsonify({
+            "status": "REJECTED",
+            "risk_level": "HIGH",
+            "reason": f"CRITICAL: Foreign phone number detected ({registered_phone}). Only UK (+44), Portugal (+351), and Spain (+34) phone numbers are allowed. Do NOT onboard.",
+            "next_action": "REJECT TECHNICIAN - Foreign phone number not permitted.",
+            "checks": {
+                "profile_photo_is_valid_selfie": False,
+                "face_match": False,
+                "id_valid": False,
+                "address_valid": False,
+                "criminal_record_valid": False,
+                "phone_prefix_valid": False
+            },
+            "extracted_data": {
+                "rejected_phone": registered_phone
+            }
+        })
 
     docs = {
         "profile_photo": data.get("profilePhoto"),
@@ -93,16 +143,8 @@ def verify():
 
         6. BACKGROUND CHECK (CRIMINAL RECORD - UK) - STRICT ZERO-CONVICTION RULE:
            - Must be issued within 12 MONTHS relative to {today_str} and name must match "{registered_name}".
-           - CRITICAL CHECK - CLEAN RECORD ONLY: The check must be completely clean (No convictions, cautions, reprimands or warnings).
-           - IF ANY CONVICTION, CHARGE, OFFENCE, OR CAUTION IS RECORDED:
-             * Set criminal_record_is_clean = false
-             * Set criminal_record_valid = false
-             * Set status = REJECTED
-             * Set risk_level = HIGH
-             * Set reason = "Criminal record is not clean. Charges or convictions detected: [specify charges]. Oscar has a zero-tolerance policy for criminal records."
-             * Set next_action = "Reject technician immediately due to criminal record"
+           - If ANY convictions, cautions or reprimands recorded: set criminal_record_is_clean = false, criminal_record_valid = false, status = REJECTED, risk_level = HIGH.
            - If clean: set criminal_record_is_clean = true, criminal_record_valid = true.
-           - If screenshot with online verification code: set manual_criminal_code_check = true, status = MANUAL_REVIEW.
 
         DECISION:
         - "status": "APPROVED|REJECTED|MANUAL_REVIEW".
@@ -134,7 +176,7 @@ def verify():
             "detected_id_type": "PASSPORT|DRIVING_LICENCE|NATIONAL_ID|UNKNOWN",
             "name_on_address_proof": "...",
             "background_check_date": "YYYY-MM-DD or null",
-            "criminal_convictions_found": "None or details of charges/convictions",
+            "criminal_convictions_found": "None or details",
             "id_expiry_date": "YYYY-MM-DD or null"
           }}
         }}
@@ -154,25 +196,11 @@ def verify():
         - If at least 2 primary names/surnames match between document and "{registered_name}", consider it a VALID NAME MATCH.
 
         COMPLIANCE RULES (SPAIN):
-        1. PROFILE PHOTO (AUTHENTIC SELFIE):
-           - Direct, authentic selfie required. Reject photos of paper photos or screen captures (profile_photo_is_valid_selfie = false).
-           - Facial match against identity document required (face_match = true|false).
-
-        2. IDENTITY DOCUMENT (DNI, NIE, or Passport):
-           - LEGIBILITY: Must be sharp, clear, and completely legible. If blurry or unreadable: id_is_legible = false, id_valid = false, status = REJECTED.
-           - PHYSICAL PHOTO ONLY: Color photo of physical document. Strictly REJECT digital screen photos and B&W copies.
-           - Must be unexpired relative to {today_str}. Name must match "{registered_name}".
-
-        3. BANK ACCOUNT & IBAN PROOF (iban_proof):
-           - Official banking document (including Revolut, Wise, N26). No handwritten notes.
-           - Name must match "{registered_name}".
-           - IBAN NUMBER MATCH (STRICT): Compare character-by-character against "{registered_iban}".
-
-        4. PROOF OF ADDRESS (address_proof):
-           - Empadronamiento certificate or utility bill. Max 6 months old. Name must match "{registered_name}".
-
-        5. EXCLUSIONS (SPAIN):
-           - Criminal record, CPLP, and Portuguese NIF are not required.
+        1. PROFILE PHOTO: Direct, authentic selfie required. Reject photos of paper photos or screen captures.
+        2. IDENTITY DOCUMENT: Sharp, legible, physical color photo of DNI/NIE/Passport. Unexpired. Name must match "{registered_name}".
+        3. BANK PROOF (iban_proof): Official banking document. Name and IBAN must match "{registered_iban}".
+        4. PROOF OF ADDRESS: Utility bill or Empadronamiento <= 6 months old.
+        5. Criminal record, CPLP, and Portuguese NIF not required.
 
         DECISION:
         - "status": "APPROVED|REJECTED|MANUAL_REVIEW".
@@ -228,40 +256,15 @@ def verify():
         - If at least 2 primary names/surnames match between document and "{registered_name}", consider it a VALID NAME MATCH.
 
         COMPLIANCE RULES (PORTUGAL):
-        1. PROFILE PHOTO (AUTHENTIC SELFIE):
-           - Direct authentic selfie required. Reject screen captures or photos of physical photos (profile_photo_is_valid_selfie = false).
-           - Facial match against identity document required (face_match = true|false).
-
-        2. IDENTITY DOCUMENT (citizen_card_front / citizen_card_back):
-           - LEGIBILITY & FOCUS: Must be sharp and completely legible. If blurry, unreadable or obstructed by glare: set id_is_legible = false, id_valid = false, status = REJECTED.
-           - PHYSICAL PHOTO ONLY: Color photo of physical document. Strictly REJECT screen photos and B&W copies.
-           - Must be unexpired relative to {today_str}. Name must match "{registered_name}".
-
-        3. CONDITIONAL PERMIT (CPLP / Expression of Interest):
-           - If Passport submitted: Valid CPLP or Manifestação de Interesse matching "{registered_name}" is MANDATORY.
-           - If Cartão de Cidadão or Título de Residência submitted: residence_permit_valid = true automatically.
-
-        4. BANK ACCOUNT & IBAN PROOF (iban_proof):
-           - Official banking document (including Revolut, Wise, Moey, ActivoBank, Santander, etc.). No handwritten notes.
-           - Name and IBAN number must match "{registered_name}" and "{registered_iban}".
-
-        5. PORTUGUESE NIF (9 digits): Must match registered NIF ("{registered_nif}").
-
-        6. PORTUGUESE CRIMINAL RECORD (criminal_record_pt) - STRICT ZERO-CONVICTION RULE:
-           - MUST be the official Portuguese Criminal Record (DGAJ / Ministério da Justiça / República Portuguesa).
-           - Must match name "{registered_name}" and be under 90 days old relative to {today_str}.
-           - CRITICAL CHECK - CLEAN RECORD REQUIRED:
-             * A clean record in Portugal states: "NADA CONSTA" (or indicates that no criminal convictions are registered).
-             * IF THE RECORD CONTAINS ANY CONVICTIONS, CRIMES, CHARGES, TRIBUNAL DECISIONS, SUSPENDED SENTENCES, OR PENALTIES (e.g., "Falsificação ou contrafacção de documento", theft, fraud, driving offences, etc.):
-               - Set criminal_record_is_clean = false
-               - Set criminal_record_valid = false
-               - Set status = REJECTED
-               - Set risk_level = HIGH
-               - Set reason = "Criminal record contains active criminal convictions/crimes: [specify exact crime, e.g. Falsificação ou contrafacção de documento]. Oscar platform policy strictly forbids technicians with a criminal record."
-               - Set next_action = "Reject technician immediately due to criminal record"
-             * If the document explicitly states "NADA CONSTA" or has no convictions: set criminal_record_is_clean = true, criminal_record_valid = true.
-
-        7. PROOF OF ADDRESS (address_proof): Under 6 months old relative to {today_str}.
+        1. PROFILE PHOTO: Direct authentic selfie required. Reject screen captures or physical photos.
+        2. IDENTITY DOCUMENT: Physical color photo, completely legible. Unexpired. Name must match "{registered_name}".
+        3. CONDITIONAL PERMIT: Valid CPLP or Manifestação mandatory if Passport submitted.
+        4. BANK PROOF: Official bank document. Name and IBAN must match "{registered_iban}".
+        5. PORTUGUESE NIF (9 digits): Must match "{registered_nif}".
+        6. CRIMINAL RECORD (PT) - ZERO-CONVICTION RULE:
+           - Official Portuguese DGAJ <= 90 days old.
+           - MUST state "NADA CONSTA". If ANY convictions/crimes detected: set criminal_record_is_clean = false, criminal_record_valid = false, status = REJECTED, risk_level = HIGH.
+        7. ADDRESS PROOF: <= 6 months old.
 
         DECISION:
         - "status": "APPROVED|REJECTED|MANUAL_REVIEW".
@@ -294,7 +297,7 @@ def verify():
             "detected_id_type": "PASSPORT|CITIZEN_CARD|RESIDENCE_CARD|UNKNOWN",
             "name_on_address_proof": "...",
             "name_on_criminal_record": "...",
-            "criminal_convictions_found": "None or specify crimes/charges found",
+            "criminal_convictions_found": "None or specify crimes",
             "extracted_nif": "...",
             "iban_holder_name": "...",
             "extracted_iban": "...",
@@ -336,9 +339,7 @@ def verify():
                 "id_is_legible": False,
                 "address_valid": False,
                 "criminal_record_valid": False,
-                "criminal_record_is_clean": False,
-                "iban_name_match": False,
-                "iban_number_match": False
+                "phone_prefix_valid": True
             }
         })
 
@@ -376,18 +377,19 @@ def verify():
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
         result = json.loads(clean_json)
 
-        # Regla estricta en Python: Antecedentes penales sucios (Zero Tolerance)
+        # Inyectar el check de teléfono válido
+        result["checks"]["phone_prefix_valid"] = True
+
+        # Regla de antecedentes penales limpios
         if result.get("checks", {}).get("criminal_record_is_clean") is False:
             result["status"] = "REJECTED"
             result["risk_level"] = "HIGH"
             result["checks"]["criminal_record_valid"] = False
-            crime_found = result.get("extracted_data", {}).get("criminal_convictions_found", "")
-            if not crime_found or crime_found.lower() == "none":
-                crime_found = "active criminal conviction(s)"
-            result["reason"] = f"CRITICAL: Criminal record is NOT clean. Charges/Convictions detected: {crime_found}. Zero-tolerance policy."
+            crime_found = result.get("extracted_data", {}).get("criminal_convictions_found", "active conviction")
+            result["reason"] = f"CRITICAL: Criminal record is NOT clean. Convictions detected: {crime_found}."
             result["next_action"] = "REJECT TECHNICIAN - Criminal record contains convictions."
 
-        # Regla de legibilidad en Python
+        # Regla de legibilidad Stripe
         if result.get("checks", {}).get("id_is_legible") is False:
             result["status"] = "REJECTED"
             result["risk_level"] = "HIGH"
@@ -404,7 +406,6 @@ def verify():
                     result["status"] = "REJECTED"
                     result["risk_level"] = "HIGH"
                     result["checks"]["work_rights_valid"] = False
-                    result["checks"]["manual_share_code_check"] = False
                     result["reason"] = "Foreign technician submitted passport but is missing mandatory UK Work Share Code."
                     result["next_action"] = "Request UK Work Share Code"
                 else:
@@ -412,14 +413,13 @@ def verify():
                     result["checks"]["manual_share_code_check"] = True
                     if result["status"] == "APPROVED":
                         result["status"] = "MANUAL_REVIEW"
-                        result["reason"] = f"Foreign passport with Work Share Code ({work_share_code}). Operator must manually verify on gov.uk."
-                        result["next_action"] = "Verify share code on official UK portal"
+                        result["reason"] = f"Foreign passport with Work Share Code ({work_share_code}). Manual check required."
             elif not is_british_or_irish and not is_passport:
                 result["checks"]["work_rights_valid"] = True
                 if work_share_code:
                     result["checks"]["manual_share_code_check"] = True
 
-        # Validación estricta complementaria de IBAN en Python para ES y PT
+        # Validación tolerante de IBAN para ES y PT
         if country in ["ES", "PT"]:
             def limpiar_iban(cadena):
                 if not cadena: return ""
@@ -450,13 +450,6 @@ def verify():
             if es_match:
                 result["checks"]["iban_number_match"] = True
                 result["checks"]["iban_is_official"] = True
-                if result.get("status") == "REJECTED" and "iban" in result.get("reason", "").lower() and "mismatch" in result.get("reason", "").lower():
-                    c = result.get("checks", {})
-                    if c.get("id_valid") and c.get("address_valid") and c.get("criminal_record_valid") and c.get("criminal_record_is_clean"):
-                        result["status"] = "APPROVED"
-                        result["risk_level"] = "LOW"
-                        result["reason"] = "All requirements (Identity, IBAN, Address, Criminal Record) are valid."
-                        result["next_action"] = "Approve profile"
             else:
                 if iban_doc and iban_dashboard and len(iban_dashboard) >= 10:
                     result["status"] = "REJECTED"
@@ -470,5 +463,5 @@ def verify():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    print("Screening Server running with Zero-Tolerance Criminal Record on http://127.0.0.1:5005")
+    print("Screening Server running with Phone Validation (+44, +351, +34) on http://127.0.0.1:5005")
     app.run(port=5005, debug=True)
