@@ -42,27 +42,40 @@ def validar_telefono_permitido(telefono_raw):
 
 @app.route("/verify-technician", methods=["POST"])
 def verify():
-    data = request.json or {}
-    country = str(data.get("operatingCountry", "PT")).upper().strip()
-    if "UK" in country or "UNITED KINGDOM" in country:
-        country = "UK"
-    elif "ES" in country or "SPAIN" in country:
-        country = "ES"
-    else:
-        country = "PT"
+    try:
+        data = request.json or {}
+        # Garantir que todos os campos têm valor por omissão em string
+        country = str(data.get("operatingCountry") or "PT").upper().strip()
+        if "UK" in country or "UNITED KINGDOM" in country:
+            country = "UK"
+        elif "ES" in country or "SPAIN" in country:
+            country = "ES"
+        else:
+            country = "PT"
 
-    registered_name = data.get("registeredName", "Not specified")
-    registered_phone = str(data.get("registeredPhone", "")).strip()
-    registered_iban = str(data.get("registeredIban", "")).strip().replace(" ", "").upper()
-    registered_nif = str(data.get("registeredNif", "")).strip().replace(" ", "").replace("/", "")
-    id_type_selected = data.get("idTypeSelected", "").upper()
-    
-    nationality = str(data.get("nationality", "")).lower()
-    sort_code = str(data.get("sortCode", "")).strip().replace(" ", "").replace("-", "")
-    account_number = str(data.get("accountNumber", "")).strip().replace(" ", "")
-    work_share_code = str(data.get("workShareCode", "")).strip()
+        registered_name = str(data.get("registeredName") or "Not specified")
+        registered_phone = str(data.get("registeredPhone") or "").strip()
+        registered_iban = str(data.get("registeredIban") or "").strip().replace(" ", "").upper()
+        registered_nif = str(data.get("registeredNif") or "").strip().replace(" ", "").replace("/", "")
+        id_type_selected = str(data.get("idTypeSelected") or "").upper()
+        
+        nationality = str(data.get("nationality") or "").lower()
+        sort_code = str(data.get("sortCode") or "").strip().replace(" ", "").replace("-", "")
+        account_number = str(data.get("accountNumber") or "").strip().replace(" ", "")
+        work_share_code = str(data.get("workShareCode") or "").strip()
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
+        # ... (Restante código da validação e chamada Gemini) ...
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()  # Imprime o erro completo na tua consola Python
+        return jsonify({
+            "status": "MANUAL_REVIEW",
+            "risk_level": "HIGH",
+            "reason": f"Server processing error: {str(e)}",
+            "next_action": "Check Python terminal traceback",
+            "checks": {}
+        }), 200  # Devolvemos 200 com o detalhe para a extensão não crashar
 
     # =========================================================================
     # REGLA OBLIGATORIA: PREFIJO TELEFÓNICO PERMITIDO (+44, +351, +34)
