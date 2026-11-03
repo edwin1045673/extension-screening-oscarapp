@@ -1,6 +1,7 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "VERIFY_DOCS") {
-    fetch("http://127.0.0.1:5005/verify-technician", {
+    // Substitui por isto:
+      fetch("https://shrouded-starfish-unbitten.ngrok-free.dev/verify-technician", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(message.payload)
