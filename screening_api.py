@@ -9,7 +9,7 @@ import time
 import os
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6IFPmg27aH5_rdM6iPfa7qO6iPMLtRWw0EtWQEwvCvLCA")
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -483,5 +483,4 @@ def verify():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    print("Screening Server running with Phone Validation (+44, +351, +34) on http://127.0.0.1:5005")
-    app.run(port=5005, debug=True)
+    app.run(host="0.0.0.0", port=5005, debug=True)
