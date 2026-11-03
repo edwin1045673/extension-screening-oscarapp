@@ -380,14 +380,34 @@ def verify():
         # Inyectar el check de teléfono válido
         result["checks"]["phone_prefix_valid"] = True
 
-        # Regla de antecedentes penales limpios
-        if result.get("checks", {}).get("criminal_record_is_clean") is False:
-            result["status"] = "REJECTED"
-            result["risk_level"] = "HIGH"
+        # -------------------------------------------------------------
+        # Comprobación de existencia del documento criminal
+        # -------------------------------------------------------------
+        has_criminal_record_doc = bool(docs.get("criminal_record"))
+
+        # Regla estricta en Python: Antecedentes penales sucios (Zero Tolerance)
+        # SOLO se considera "sucio" si el documento realmente existe y se detectaron cargos.
+        if has_criminal_record_doc:
+            crime_found = result.get("extracted_data", {}).get("criminal_convictions_found", "")
+            crimes_detected = crime_found and crime_found.lower() not in ["none", "null", "undefined", "clean", "nada consta", "no convictions"]
+
+            if result.get("checks", {}).get("criminal_record_is_clean") is False or crimes_detected:
+                result["status"] = "REJECTED"
+                result["risk_level"] = "HIGH"
+                result["checks"]["criminal_record_valid"] = False
+                result["checks"]["criminal_record_is_clean"] = False
+                result["reason"] = f"CRITICAL: Criminal record contains convictions/charges: {crime_found or 'Active charges'}. Zero-tolerance policy."
+                result["next_action"] = "REJECT TECHNICIAN - Criminal record contains convictions."
+            else:
+                result["checks"]["criminal_record_is_clean"] = True
+        else:
+            # Si NO subió el documento: NO es un registro criminal sucio, simplemente falta el documento.
+            result["checks"]["criminal_record_is_clean"] = None
             result["checks"]["criminal_record_valid"] = False
-            crime_found = result.get("extracted_data", {}).get("criminal_convictions_found", "active conviction")
-            result["reason"] = f"CRITICAL: Criminal record is NOT clean. Convictions detected: {crime_found}."
-            result["next_action"] = "REJECT TECHNICIAN - Criminal record contains convictions."
+            if country in ["PT", "UK"]:
+                result["status"] = "REJECTED"
+                result["reason"] = "Background check / Criminal record is missing."
+                result["next_action"] = "Request background check document."
 
         # Regla de legibilidad Stripe
         if result.get("checks", {}).get("id_is_legible") is False:

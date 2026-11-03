@@ -206,14 +206,16 @@
         `;
       }
 
-      // Alerta de Registro Criminal Sucio
+      // Alerta Roja: ÚNICAMENTE si el registro fue presentado Y tiene antecedentes comprobados
       let criminalAlertBanner = "";
-      if (data.checks && data.checks.criminal_record_is_clean === false) {
-        const crimes = data.extracted_data?.criminal_convictions_found || "Convictions/Charges detected";
+      const crimes = data.extracted_data?.criminal_convictions_found;
+      const hasRealCrimes = crimes && !["none", "null", "undefined", "clean", "nada consta"].includes(crimes.toLowerCase());
+
+      if (payload.criminalRecordPt && data.checks && (data.checks.criminal_record_is_clean === false || hasRealCrimes)) {
         criminalAlertBanner = `
           <div style="background-color: #fee2e2; border: 2px solid #dc2626; border-radius: 6px; padding: 8px; margin: 8px 0; color: #991b1b; font-size: 11px;">
             <div style="font-weight: 800; font-size: 12px; margin-bottom: 2px;">🚨 CRIMINAL RECORD NOT CLEAN</div>
-            <div><strong>Crimes detected:</strong> ${crimes}</div>
+            <div><strong>Crimes detected:</strong> ${crimes || "Active convictions found"}</div>
             <div style="margin-top: 4px; font-weight: 700; color: #b91c1c;">⚠️ DO NOT ONBOARD THIS TECHNICIAN.</div>
           </div>
         `;
@@ -229,8 +231,7 @@
             <div class="check-item"><strong>Facial Match:</strong> ${data.checks.face_match ? "✅ Match" : "❌ Mismatch"}</div>
             <div class="check-item"><strong>ID / Passport:</strong> ${data.checks.id_valid ? "✅ Valid" : "❌ Invalid / B&W / Missing back"}</div>
             <div class="check-item"><strong>Sort Code & Account:</strong> ${data.checks.bank_details_match ? "✅ Provided" : "❌ Missing / Invalid"}</div>
-            <div class="check-item"><strong>Address Proof (&le;6 mos):</strong> ${data.checks.address_valid ? "✅ Valid" : "❌ Invalid / Expired"}</div>
-            <div class="check-item"><strong>Background Check:</strong> ${data.checks.criminal_record_is_clean ? "✅ Clean Record" : "❌ CONVICTIONS DETECTED"}</div>
+            <div class="check-item"><strong>Background Check:</strong> ${!payload.criminalRecordPt ? "❌ Missing Document" : (data.checks.criminal_record_is_clean ? "✅ Clean Record" : "❌ CONVICTIONS DETECTED")}
           </div>
         `;
       } else if (payload.operatingCountry === "ES") {
@@ -259,7 +260,7 @@
             <div class="check-item"><strong>IBAN Holder:</strong> ${data.checks.iban_name_match ? "✅ Match" : "❌ Mismatch / 3rd Party"}</div>
             <div class="check-item"><strong>IBAN Number:</strong> ${data.checks.iban_number_match ? "✅ Identical" : "❌ Number Mismatch"}</div>
             <div class="check-item"><strong>Address Proof (&le;6 mos):</strong> ${data.checks.address_valid ? "✅ Valid" : "❌ Expired / Invalid"}</div>
-            <div class="check-item"><strong>PT Criminal Record:</strong> ${data.checks.criminal_record_is_clean ? "✅ Clean (NADA CONSTA)" : "❌ DIRTY (CONVICTIONS)"}</div>
+            <div class="check-item"><strong>PT Criminal Record:</strong> ${!payload.criminalRecordPt ? "❌ Missing Document" : (data.checks.criminal_record_is_clean ? "✅ Clean (NADA CONSTA)" : "❌ DIRTY (CONVICTIONS)")}
           </div>
         `;
       }
