@@ -1,6 +1,6 @@
 /**
  * CONTENT SCRIPT: DOC SCREENING AI + REQUEST MISSING DOCS + DRAGGABLE PANEL
- * Oscar App Technician Onboarding Compliance
+ * Oscar App Technician Onboarding Compliance - PORTUGAL (PT) EDITION
  */
 
 // =========================================================================
@@ -116,8 +116,11 @@ async function requestMissingDocuments(workerId, missingKeys = []) {
 }
 
 // =========================================================================
-// 2. EXTRACCIÓN DE DATOS DEL PERFIL DEL TÉCNICO EN EL DOM
+// 2. EXTRACCIÓN DE DATOS DEL PERFIL DEL TÉCNICO EN EL DOM (PORTUGAL)
 // =========================================================================
+const IBAN_PT_REGEX = /^PT\d{23}$/;
+const NIF_PT_REGEX = /^[12356789]\d{8}$/;
+
 function extractProfileData() {
   const findValueByLabels = (labels) => {
     const els = document.querySelectorAll("h6, p, span, label, div, li, dd");
@@ -127,6 +130,31 @@ function extractProfileData() {
         if (text.toLowerCase().startsWith(label.toLowerCase())) {
           const parts = text.split(":");
           if (parts.length > 1) return parts.slice(1).join(":").trim();
+        }
+      }
+    }
+    return "";
+  };
+
+  const getInputValueByLabel = (labels) => {
+    const els = Array.from(document.querySelectorAll("p, span, label, div, td, th"));
+    for (const el of els) {
+      const rawText = el.innerText?.trim() || "";
+      for (const label of labels) {
+        const cleanLabel = label.replace(/:$/, "").trim().toLowerCase();
+        const cleanText = rawText.replace(/:$/, "").trim().toLowerCase();
+        if (cleanText === cleanLabel) {
+          let ancestor = el.parentElement;
+          for (let depth = 0; depth < 3 && ancestor; depth++) {
+            const inputs = ancestor.querySelectorAll("input");
+            if (inputs.length === 1 && inputs[0].value !== undefined) {
+              return inputs[0].value.trim();
+            }
+            if (inputs.length > 1) {
+              break;
+            }
+            ancestor = ancestor.parentElement;
+          }
         }
       }
     }
@@ -151,22 +179,57 @@ function extractProfileData() {
   const breadcrumbId = document.querySelector("#root > div > div > header > div > div > div:nth-child(1) > nav > ol > li:nth-child(3) > a")?.innerText?.trim();
   const workerId = urlMatches ? urlMatches[1] : (breadcrumbId || window.location.pathname.split("/").filter(Boolean).pop());
 
-  const registeredName = findValueByLabels(["Name:", "Nome:", "Nombre:"]) ||
+  const firstName = getInputValueByLabel(["First name:", "First name", "Nome próprio:", "Nome:"]);
+  const lastName = getInputValueByLabel(["Last name:", "Last name", "Apelido:", "Sobrenome:"]);
+  const fullNameFromInputs = `${firstName} ${lastName}`.trim();
+
+  const registeredName = fullNameFromInputs ||
+    findValueByLabels(["Name:", "Nome:", "Nombre:"]) ||
     document.querySelector("#root main h5")?.innerText?.trim() ||
     document.querySelector("h5")?.innerText?.trim() || "";
+
+  const registeredEmail = getInputValueByLabel(["Email:", "Email", "E-mail:", "Correo:"]) ||
+    findValueByLabels(["Email:", "E-mail:", "Correo:"]) ||
+    document.querySelector("input[type='email']")?.value?.trim() || "";
 
   const registeredPhone = findValueByLabels(["Phone number:", "Phone:", "Telefone:", "Telemóvel:", "Mobile:", "Teléfono:"]) ||
     document.querySelector("input[type='tel']")?.value || "";
 
-  const basicInputs = document.querySelectorAll("#outlined-basic");
-  let registeredIban = "";
-  let registeredNif = "";
-  if (basicInputs.length >= 2) {
-    registeredIban = basicInputs[0]?.value?.trim() || "";
-    registeredNif = basicInputs[1]?.value?.trim() || "";
-  } else {
-    registeredIban = document.querySelector("input[name*='iban']")?.value || findValueByLabels(["IBAN:"]);
-    registeredNif = document.querySelector("input[name*='nif']")?.value || findValueByLabels(["NIF:", "VAT:"]);
+  // Capturar IBAN y NIF estrictamente validados + sessionStorage saneado
+  let registeredIban = (sessionStorage.getItem(`oscar_iban_${workerId}`) || "").replace(/[\s-]/g, "").toUpperCase();
+  let registeredNif = (sessionStorage.getItem(`oscar_nif_${workerId}`) || "").replace(/[\s-]/g, "");
+
+  if (!IBAN_PT_REGEX.test(registeredIban)) {
+    registeredIban = "";
+    sessionStorage.removeItem(`oscar_iban_${workerId}`);
+  }
+  if (!NIF_PT_REGEX.test(registeredNif)) {
+    registeredNif = "";
+    sessionStorage.removeItem(`oscar_nif_${workerId}`);
+  }
+
+  let domIban = getInputValueByLabel(["IBAN:", "IBAN"]).replace(/[\s-]/g, "").toUpperCase();
+  let domNif = getInputValueByLabel(["NIF:", "NIF"]).replace(/[\s-]/g, "");
+
+  if (!IBAN_PT_REGEX.test(domIban) || !NIF_PT_REGEX.test(domNif)) {
+    const allInputs = Array.from(document.querySelectorAll("input"));
+    for (const inp of allInputs) {
+      const compactVal = (inp.value || "").replace(/[\s-]/g, "").trim();
+      if (!IBAN_PT_REGEX.test(domIban) && IBAN_PT_REGEX.test(compactVal.toUpperCase())) {
+        domIban = compactVal.toUpperCase();
+      } else if (!NIF_PT_REGEX.test(domNif) && NIF_PT_REGEX.test(compactVal)) {
+        domNif = compactVal;
+      }
+    }
+  }
+
+  if (IBAN_PT_REGEX.test(domIban)) {
+    registeredIban = domIban;
+    sessionStorage.setItem(`oscar_iban_${workerId}`, domIban);
+  }
+  if (NIF_PT_REGEX.test(domNif)) {
+    registeredNif = domNif;
+    sessionStorage.setItem(`oscar_nif_${workerId}`, domNif);
   }
 
   let operatingCountry = "PT";
@@ -180,7 +243,25 @@ function extractProfileData() {
   const profilePhoto = document.querySelector("img[src*='profile'], img[src*='avatar']")?.src || findDocumentLink(["profile_photo", "avatar", "profile_picture"]);
   const citizenCardFront = findDocumentLink(["citizen_card_front", "id_front", "passport", "dni_front"]);
   const citizenCardBack = findDocumentLink(["citizen_card_back", "id_back", "dni_back"]);
-  const residencePermit = findDocumentLink(["residence_permit", "cplp", "manifestacao", "residence_title"]);
+
+  // Extracción robusta de Residence Permit / AIMA / CPLP (solo enlaces de documentos válidos)
+  let residencePermit = null;
+  const allLinks = Array.from(document.querySelectorAll("a"));
+  for (const a of allLinks) {
+    const text = (a.innerText || "").toLowerCase();
+    const href = (a.href || "").toLowerCase();
+    if (!href.includes("storage.googleapis.com")) continue;
+    if (
+      href.includes("additional_info") || text.includes("additional_info") ||
+      href.includes("residency_title") || href.includes("residence_title") ||
+      href.includes("residence_permit") || text.includes("cplp") ||
+      text.includes("manifestacao") || href.includes("cplp")
+    ) {
+      residencePermit = a.href;
+      break;
+    }
+  }
+
   const addressProof = findDocumentLink(["address_proof", "comprovativo_morada", "morada"]);
   const ibanProof = findDocumentLink(["iban_proof", "bank_proof", "comprovativo_iban"]);
   const criminalRecordPt = findDocumentLink(["criminal_record", "registo_criminal", "antecedentes_penales"]);
@@ -194,6 +275,7 @@ function extractProfileData() {
     workerId,
     operatingCountry,
     registeredName,
+    registeredEmail,
     registeredPhone,
     registeredIban,
     registeredNif,
@@ -224,7 +306,6 @@ function makeElementDraggable(panel, handle) {
   let initialLeft = 0, initialTop = 0;
 
   handle.addEventListener("mousedown", (e) => {
-    // Si hace clic en el botón de minimizar, no iniciar el arrastre
     if (e.target.id === "screening-minimize-btn") return;
 
     isDragging = true;
@@ -235,7 +316,6 @@ function makeElementDraggable(panel, handle) {
     initialLeft = rect.left;
     initialTop = rect.top;
 
-    // Desactivar temporalmente transiciones y estilos de 'right' para usar 'left' absoluto
     panel.style.right = "auto";
     panel.style.bottom = "auto";
     panel.style.left = `${initialLeft}px`;
@@ -254,7 +334,6 @@ function makeElementDraggable(panel, handle) {
     let newLeft = initialLeft + deltaX;
     let newTop = initialTop + deltaY;
 
-    // Evitar que se salga fuera de los bordes de la pantalla
     const maxLeft = window.innerWidth - panel.offsetWidth - 10;
     const maxTop = window.innerHeight - panel.offsetHeight - 10;
 
@@ -306,7 +385,7 @@ function createFloatingWidget() {
       cursor: move;
     ">
       <span style="font-weight: 700; font-size: 13px; color: #ffffff; display: flex; align-items: center; gap: 6px;">
-        <span>✥</span> Doc Screening AI <span style="font-size: 10px; color: #9ca3af; background: #1f2937; padding: 1px 5px; border-radius: 4px;">v3.4</span>
+        <span>✥</span> Doc Screening PT 🇵🇹<span style="font-size: 10px; color: #9ca3af; background: #1f2937; padding: 1px 5px; border-radius: 4px;">v3.4</span>
       </span>
       <button id="screening-minimize-btn" style="
         background: none;
@@ -355,21 +434,16 @@ function createFloatingWidget() {
 
   document.body.appendChild(panel);
 
-  // Hacer el panel arrastrable desde la cabecera
   const dragHeader = document.getElementById("screening-drag-header");
   makeElementDraggable(panel, dragHeader);
 
-  // Botón minimizar
   let minimized = false;
   document.getElementById("screening-minimize-btn").addEventListener("click", () => {
     minimized = !minimized;
     document.getElementById("screening-content").style.display = minimized ? "none" : "block";
   });
 
-  // Botón Verificar
   document.getElementById("screening-verify-btn").addEventListener("click", runVerification);
-
-  // Botón Solicitar Documentos Faltantes
   document.getElementById("screening-request-btn").addEventListener("click", sendMissingDocsRequest);
 }
 
@@ -407,15 +481,39 @@ async function runVerification() {
   });
 }
 
+function checkItem(label, passed) {
+  let icon = "⚠️";
+  let color = "#fbbf24";
+  let text = "N/A";
+
+  if (passed === true) {
+    icon = "✅";
+    color = "#4ade80";
+    text = "OK";
+  } else if (passed === false) {
+    icon = "❌";
+    color = "#f87171";
+    text = "FAIL";
+  }
+
+  return `
+    <div style="display: flex; justify-content: space-between; margin-bottom: 4px; color: #cbd5e1;">
+      <span>${label}</span>
+      <span style="color: ${color}; font-weight: 600;">${icon} ${text}</span>
+    </div>
+  `;
+}
+
 function renderAuditResult(data) {
   const statusArea = document.getElementById("screening-status-area");
   const requestBtn = document.getElementById("screening-request-btn");
 
-  const status = data.status || "MANUAL_REVIEW";
   const checks = data.checks || {};
+  const status = data.status || "MANUAL_REVIEW";
   const reason = data.reason || "No detail provided.";
   const nextAction = data.next_action || "";
 
+  // Determinar documentos faltantes / rechazados para el botón de solicitud (PT)
   currentRejectedDocs = [];
   if (checks.id_valid === false) currentRejectedDocs.push("identification");
   if (checks.criminal_record_valid === false) currentRejectedDocs.push("criminalRecord");
@@ -424,47 +522,60 @@ function renderAuditResult(data) {
   if (checks.profile_photo_is_valid_selfie === false) currentRejectedDocs.push("profilePicture");
   if (checks.residence_permit_valid === false) currentRejectedDocs.push("residenceTitle");
 
-  if (currentRejectedDocs.length > 0) {
-    requestBtn.style.display = "block";
-    requestBtn.innerText = `📩 Request ${currentRejectedDocs.length} Missing Docs`;
-    requestBtn.style.backgroundColor = "#dc2626";
-    requestBtn.disabled = false;
-  } else {
-    requestBtn.style.display = "none";
+  if (requestBtn) {
+    if (currentRejectedDocs.length > 0) {
+      requestBtn.style.display = "block";
+      requestBtn.innerText = `📩 Request ${currentRejectedDocs.length} Missing Docs`;
+      requestBtn.style.backgroundColor = "#dc2626";
+      requestBtn.disabled = false;
+    } else {
+      requestBtn.style.display = "none";
+    }
   }
 
-  const badgeColor = status === "APPROVED" ? "#15803d" : (status === "REJECTED" ? "#b91c1c" : "#b45309");
+  // Colores según el veredicto
+  let badgeBg = "#d97706"; // MANUAL_REVIEW (ámbar)
+  let badgeIcon = "⚠️";
+  if (status === "APPROVED") {
+    badgeBg = "#16a34a"; // Verde
+    badgeIcon = "✅";
+  } else if (status === "REJECTED") {
+    badgeBg = "#dc2626"; // Rojo
+    badgeIcon = "❌";
+  }
 
-  const checkItem = (label, val) => {
-    if (val === undefined || val === null) return "";
-    const icon = val ? "<span style='color:#4ade80;'>✓</span>" : "<span style='color:#f87171;'>✕</span>";
-    return `<div style="display:flex; justify-content:space-between; margin-bottom:3px;">
-      <span>${label}:</span><span>${icon}</span>
-    </div>`;
-  };
+  // Renderizar resultado completo dentro de statusArea
+  if (statusArea) {
+    statusArea.innerHTML = `
+      <div style="margin-top: 8px; background: ${badgeBg}; color: #fff; padding: 6px 10px; border-radius: 6px; font-weight: 700; font-size: 13px; text-align: center;">
+        ${badgeIcon} ${status}
+      </div>
 
-  statusArea.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-      <span style="font-weight:600;">Status:</span>
-      <span style="background:${badgeColor}; padding:2px 8px; border-radius:4px; font-weight:bold;">${status}</span>
-    </div>
+      <div style="margin-top: 8px; background: #1e293b; border-left: 3px solid ${badgeBg}; padding: 8px; border-radius: 4px; font-size: 12px; color: #f1f5f9; line-height: 1.4;">
+        <strong style="color: #94a3b8; display: block; margin-bottom: 2px;">📋 Reason / Findings:</strong>
+        ${reason}
+      </div>
 
-    <div style="background:#1f2937; padding:8px; border-radius:6px; margin-bottom:8px;">
-      <div style="font-size:11px; color:#d1d5db; margin-bottom:4px;"><strong>Reason:</strong> ${reason}</div>
-      ${nextAction ? `<div style="font-size:11px; color:#93c5fd;"><strong>Action:</strong> ${nextAction}</div>` : ""}
-    </div>
+      ${nextAction ? `
+      <div style="margin-top: 6px; background: #1e293b; border-left: 3px solid #38bdf8; padding: 8px; border-radius: 4px; font-size: 12px; color: #e2e8f0; line-height: 1.4;">
+        <strong style="color: #38bdf8; display: block; margin-bottom: 2px;">👉 Next Action:</strong>
+        ${nextAction}
+      </div>
+      ` : ""}
 
-    <div style="border-top:1px solid #374151; padding-top:6px; font-size:11px;">
-      ${checkItem("Selfie Authentic", checks.profile_photo_is_valid_selfie)}
-      ${checkItem("Face Match", checks.face_match)}
-      ${checkItem("ID / Passport Valid", checks.id_valid)}
-      ${checkItem("ID Color & Legible", checks.id_is_legible)}
-      ${checkItem("NIF Match (PT)", checks.nif_match)}
-      ${checkItem("Proof of Address", checks.address_valid)}
-      ${checkItem("Bank / IBAN Match", checks.iban_number_match ?? checks.bank_details_match)}
-      ${checkItem("Background Check Clean", checks.criminal_record_is_clean)}
-    </div>
-  `;
+      <div style="margin-top: 10px; border-top: 1px solid #334155; padding-top: 8px; font-size: 12px;">
+        ${checkItem("Selfie Authentic:", checks.profile_photo_is_valid_selfie)}
+        ${checkItem("Face Match:", checks.face_matches_id)}
+        ${checkItem("ID / Passport Valid:", checks.id_valid)}
+        ${checkItem("ID Color & Legible:", checks.id_is_color_photo && checks.id_is_legible)}
+        ${checkItem("NIF Match (PT):", checks.nif_match)}
+        ${checkItem("Proof of Address:", checks.address_valid)}
+        ${checkItem("Bank / IBAN Match:", checks.iban_number_match && checks.bank_details_match)}
+        ${checkItem("Criminal Record:", checks.criminal_record_valid)}
+        ${checkItem("Residence Permit:", checks.residence_permit_valid)}
+      </div>
+    `;
+  }
 }
 
 // =========================================================================
@@ -501,3 +612,20 @@ if (document.readyState === "loading") {
 } else {
   createFloatingWidget();
 }
+
+// Capturar automáticamente IBAN y NIF válidos al visitar el perfil
+setInterval(() => {
+  const urlMatches = window.location.pathname.match(/\/workers?\/(\d+)/i) || window.location.pathname.match(/\/partner\/(\d+)/i);
+  const wId = urlMatches ? urlMatches[1] : null;
+  if (!wId) return;
+
+  const inputs = Array.from(document.querySelectorAll("input"));
+  for (const inp of inputs) {
+    const val = (inp.value || "").replace(/[\s-]/g, "").trim();
+    if (IBAN_PT_REGEX.test(val.toUpperCase())) {
+      sessionStorage.setItem(`oscar_iban_${wId}`, val.toUpperCase());
+    } else if (NIF_PT_REGEX.test(val)) {
+      sessionStorage.setItem(`oscar_nif_${wId}`, val);
+    }
+  }
+}, 1500);

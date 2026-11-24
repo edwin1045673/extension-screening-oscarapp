@@ -13,7 +13,7 @@ app = Flask(__name__)
 # Permitir conexiones CORS desde cualquier origen (incluyendo ngrok y extensiones de Chrome)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6IFPmg27aH5_rdM6iPfa7qO6iPMLtRWw0EtWQEwvCvLCA")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 ALLOWED_PHONE_PREFIXES = ["+44", "+351", "+34"]
@@ -48,14 +48,10 @@ def verify():
         # 1. Definición obligatoria de la fecha actual (evita errores de Pylance)
         today_str = datetime.now().strftime("%Y-%m-%d")
 
-        data = request.json or {}
-        country = str(data.get("operatingCountry") or "PT").upper().strip()
-        if "UK" in country or "UNITED KINGDOM" in country:
-            country = "UK"
-        elif "ES" in country or "SPAIN" in country:
-            country = "ES"
-        else:
-            country = "PT"
+        data = request.get_json() or {}
+        # Priorizar el país forzado por cada extensión (PT, ES o UK)
+        country = (data.get("forced_country") or data.get("country") or "PT").upper().strip()
+        print(f"Auditando perfil bajo reglas estrictas de: {country}")
 
         registered_name = str(data.get("registeredName") or "Not specified")
         registered_phone = str(data.get("registeredPhone") or "").strip()
@@ -131,6 +127,16 @@ def verify():
                - C) British or Irish ({is_british_or_irish} = True): Must submit valid British/Irish PASSPORT.
                - D) Foreigner ({is_british_or_irish} = False): Can submit Passport, National ID or Driving Licence. If National ID or Driving Licence submitted (NOT passport), the BACK [citizen_card_back] is STRICTLY MANDATORY.
                - Must be unexpired relative to {today_str}.
+            
+            2.5 MIRROR / FLIPPED EFFECT POLICY (STRICT):
+                - Check the text orientation on all identity documents (DNI, NIE, Passport, Citizen Card, Residence Permit).
+                - The document MUST NOT be mirrored, flipped horizontally, or written backwards (text reading right-to-left like a mirror selfie).
+                - If the document is mirrored / flipped:
+                    * Set "id_valid": false.
+                    * Set "id_is_legible": false.
+                    * Force status to "REJECTED" or "MANUAL_REVIEW".
+                    * "reason" MUST state: "Identification document is mirrored / flipped horizontally (mirror selfie effect). Text must be readable normally from left to right."
+                    * "next_action" MUST state: "Request new identification document (must not be mirrored or reversed)".
 
             3. RIGHT TO WORK SHARE CODE (UK):
                - Only applies to foreigners submitting a PASSPORT:
@@ -188,58 +194,70 @@ def verify():
 
         elif country == "ES":
             prompt = f"""
-            You are a legal compliance screening officer for the Oscar platform onboarding in SPAIN.
-            Audit Date: {today_str}.
-            Registered Name: "{registered_name}".
-            Registered IBAN in dashboard: "{registered_iban}".
+        You are a senior compliance auditor for Oscar app in SPAIN (ES).
+        Target worker: "{registered_name}", IBAN: "{registered_iban}". Current date: {today_str}.
 
-            NAME MATCHING POLICY:
-            - If at least 2 primary names/surnames match between document and "{registered_name}", consider it a VALID NAME MATCH.
+        MANDATORY DOCUMENTS REQUIRED FOR SPAIN (ES) - ONLY THESE 4:
+        1. PROFILE PICTURE:
+        - Must be a genuine, authentic selfie (front-facing face, natural angle).
+        - Reject full-body photos, cropped photos of another screen, or photos of physical document cards.
+        - Must match the person shown in the identity document.
 
-            COMPLIANCE RULES (SPAIN):
-            1. PROFILE PHOTO: Direct, authentic selfie required. Reject photos of paper photos or screen captures.
-            2. IDENTITY DOCUMENT: Sharp, legible, physical color photo of DNI/NIE/Passport. Unexpired relative to {today_str}. Name must match "{registered_name}".
-            3. BANK PROOF (iban_proof): Official banking document. Name and IBAN must match "{registered_iban}".
-            4. PROOF OF ADDRESS: Utility bill or Empadronamiento <= 6 months old.
-            5. Criminal record, CPLP, and Portuguese NIF not required.
+        2. IDENTITY DOCUMENT (COLOR PHOTO MANDATORY):
+        - Accepted types: DNI, NIE, or Passport.
+        - MUST be an authentic physical color photograph.
+        - REJECT: Black & white photos, photocopies, scans, digital screenshots, or PDF prints.
+        - NO MIRROR / FLIPPED DOCUMENTS: The text must NOT be flipped horizontally or mirrored.
+        - Must be unexpired relative to {today_str}.
+        - Name must match "{registered_name}".
 
-            DECISION:
-            - "status": "APPROVED|REJECTED|MANUAL_REVIEW".
-            - "reason": Explanation in ENGLISH.
-            - "next_action": Recommendation in ENGLISH.
+        3. PROOF OF ADDRESS (EMPADRONAMIENTO OR UTILITY BILL):
+        - Accepted: Certificado de Empadronamiento in Spain OR Utility Bills (electricity, water, gas).
+        - Name must match "{registered_name}".
+        - Issue date MUST be within the last 6 months from {today_str} (or within the validity period stated on the document).
 
-            Return ONLY a JSON matching this exact structure:
-            {{
-              "status": "APPROVED|REJECTED|MANUAL_REVIEW",
-              "risk_level": "LOW|MEDIUM|HIGH",
-              "reason": "...",
-              "next_action": "...",
-              "checks": {{
-                "profile_photo_is_valid_selfie": true|false,
-                "face_match": true|false,
-                "id_valid": true|false,
-                "id_is_legible": true|false,
-                "id_is_color_original": true|false,
-                "id_is_screen_photo": true|false,
-                "address_valid": true|false,
-                "iban_name_match": true|false,
-                "iban_number_match": true|false,
-                "iban_is_official": true|false,
-                "residence_permit_valid": true,
-                "criminal_record_valid": true,
-                "criminal_record_is_clean": true,
-                "nif_match": true
-              }},
-              "extracted_data": {{
-                "detected_id_type": "DNI|NIE|PASSPORT|UNKNOWN",
-                "name_on_address_proof": "...",
-                "iban_holder_name": "...",
-                "extracted_iban": "...",
-                "address_doc_date": "YYYY-MM-DD or null",
-                "id_expiry_date": "YYYY-MM-DD or null"
-              }}
-            }}
-            """
+        4. BANK / IBAN PROOF:
+        - Must clearly show the account holder name matching "{registered_name}".
+        - Must clearly show the complete IBAN matching "{registered_iban}".
+        - ATM receipts or documents without the holder's name are strictly INVALID.
+
+        CRITICAL POLICY FOR SPAIN (ES):
+        - CRIMINAL RECORD IS NOT REQUIRED IN SPAIN. Do NOT request or expect a criminal record. Always set "criminal_record_valid": true and "criminal_record_is_clean": true for Spain.
+        - RESIDENCE PERMIT / CPLP IS NOT REQUIRED IN SPAIN. Always set "residence_permit_valid": true.
+
+        LANGUAGE & NATIONALITY CHECK (SPANISH OR PORTUGUESE ACCEPTED):
+        - Spanish-speaking countries include: Spain, Argentina, Colombia, Venezuela, Peru, Chile, Ecuador, Cuba, Dominican Republic, Mexico, Uruguay, Bolivia, Paraguay, Guatemala, Honduras, El Salvador, Nicaragua, Costa Rica, Panama, Equatorial Guinea.
+        - Portuguese-speaking countries (CPLP) include: Portugal, Brazil, Angola, Mozambique, Cape Verde, Guinea-Bissau, São Tomé and Príncipe, East Timor.
+        - Both Spanish and Portuguese speakers are accepted in Spain without needing a phone call.
+        - Detect the technician's nationality from declared nationality or identity document.
+        - If technician is from a country where NEITHER Spanish NOR Portuguese is an official/native language (e.g., Pakistan, India, Nepal, Morocco, Bangladesh, etc.):
+        - Set "language_check_required": true.
+        - If there are no blocking document rejections (status would otherwise be APPROVED), force status to "MANUAL_REVIEW".
+        - "next_action" MUST explicitly be: "Need to call this technician to check if they speak ES or PT".
+        - If technician is from a native Spanish OR Portuguese speaking country:
+        - Set "language_check_required": false.
+
+        Return JSON adhering to the required schema:
+        {{
+        "status": "APPROVED" | "REJECTED" | "MANUAL_REVIEW",
+        "reason": "English explanation of decisions",
+        "next_action": "English action for operations team",
+        "checks": {{
+            "profile_photo_is_valid_selfie": true|false,
+            "face_matches_id": true|false,
+            "id_valid": true|false,
+            "id_is_color_photo": true|false,
+            "id_is_legible": true|false,
+            "address_valid": true|false,
+            "iban_number_match": true|false,
+            "bank_details_match": true|false,
+            "criminal_record_valid": true,
+            "criminal_record_is_clean": true,
+            "residence_permit_valid": true,
+            "documents_upright_orientation": true|false
+        }}
+        }}
+        """
 
         else:  # PORTUGAL (PT)
             prompt = f"""
@@ -248,26 +266,91 @@ def verify():
             Registered Name: "{registered_name}".
             Registered IBAN in dashboard: "{registered_iban}".
             Registered NIF: "{registered_nif}".
+            Declared Nationality: "{nationality}".
             Selected ID Type: "{id_type_selected}".
+
+            LANGUAGE RULE:
+            - ALL explanations, reasons, and actions MUST be written strictly in ENGLISH.
 
             NAME MATCHING POLICY:
             - If at least 2 primary names/surnames match between document and "{registered_name}", consider it a VALID NAME MATCH.
 
             COMPLIANCE RULES (PORTUGAL):
-            1. PROFILE PHOTO: Direct authentic selfie required. Reject screen captures or physical photos.
-            2. IDENTITY DOCUMENT: Physical color photo, completely legible. Unexpired relative to {today_str}. Name must match "{registered_name}".
-            3. CONDITIONAL PERMIT: Valid CPLP or Manifestação mandatory if Passport submitted.
-            4. BANK PROOF: Official bank document. Name and IBAN must match "{registered_iban}".
-            5. PORTUGUESE NIF (9 digits): Must match "{registered_nif}".
-            6. CRIMINAL RECORD (PT) - ZERO-CONVICTION RULE:
-               - Official Portuguese DGAJ <= 90 days old.
-               - MUST state "NADA CONSTA". If ANY convictions/crimes detected: set criminal_record_is_clean = false, criminal_record_valid = false, status = REJECTED, risk_level = HIGH.
-            7. ADDRESS PROOF: <= 6 months old relative to {today_str}.
+            1. LANGUAGE & NATIONALITY CHECK (PORTUGUESE OR SPANISH ACCEPTED):
+               - Portuguese-speaking countries (CPLP) include: Portugal, Brazil, Angola, Mozambique, Cape Verde, Guinea-Bissau, São Tomé and Príncipe, East Timor.
+               - Spanish-speaking countries include: Spain, Argentina, Colombia, Venezuela, Peru, Chile, Ecuador, Cuba, Dominican Republic, Mexico, Uruguay, Bolivia, Paraguay, Guatemala, Honduras, El Salvador, Nicaragua, Costa Rica, Panama, Equatorial Guinea.
+               - Both Portuguese and Spanish speakers are accepted in Portugal without needing a phone call.
+               - Detect the technician's nationality from declared nationality or identity document.
+               - If technician is from a country where NEITHER Portuguese NOR Spanish is an official/native language (e.g., Pakistan, India, Nepal, Morocco, Bangladesh, etc.):
+                 * Set "language_check_required": true.
+                 * If there are no blocking document rejections (status would otherwise be APPROVED), force status to "MANUAL_REVIEW".
+                 * "next_action" MUST explicitly be: "Need to call this technician to check if they speak PT or ES".
+               - If technician is from a native Portuguese OR Spanish speaking country:
+                 * Set "language_check_required": false.
+
+            2. PROFILE PHOTO: Direct authentic selfie required. Reject screen captures or physical photos.
+            3. IDENTITY DOCUMENT: Physical color photo, completely legible. Unexpired relative to {today_str}. Name must match "{registered_name}".
+            3.5 MIRROR / FLIPPED EFFECT POLICY (STRICT):
+                - Check the text orientation on all identity documents (DNI, NIE, Passport, Citizen Card, Residence Permit).
+                - The document MUST NOT be mirrored, flipped horizontally, or written backwards (text reading right-to-left like a mirror selfie).
+                - If the document is mirrored / flipped:
+                    * Set "id_valid": false.
+                    * Set "id_is_legible": false.
+                    * Force status to "REJECTED" or "MANUAL_REVIEW".
+                    * "reason" MUST state: "Identification document is mirrored / flipped horizontally (mirror selfie effect). Text must be readable normally from left to right."
+                    * "next_action" MUST state: "Request new identification document (must not be mirrored or reversed)".
+            4. CONDITIONAL PERMIT / RIGHT TO WORK (MANDATORY IF PASSPORT SUBMITTED):
+               - IMPORTANT: Visas ("VISTO / VISA PORTUGAL PRT") are frequently stamped directly inside the passport booklet. Always inspect both the identification document pages and the residence permit document for a valid Portuguese visa sticker or AIMA receipt.
+               - If an identity document other than a Portuguese Citizen Card (e.g., Passport) is submitted, the technician MUST provide at least ONE of the following valid permits:
+                 a) CPLP Residence Certificate (Autorização de Residência CPLP) with valid date.
+                 b) Manifestação de Interesse with valid date.
+                 c) AIMA Receipt ("RECIBO COMPROVATIVO DE PEDIDO" from Agência para a Integração, Migrações e Asilo):
+                    - Valid for Concessão or Renovação de Autorização de Residência (Arts. 78, 88, 89, 91, 98 or similar).
+                    - Must clearly show AIMA header/logo, Process number ("Processo n.º"), applicant name matching "{registered_name}", and request date.
+                 d) Portuguese Visa Sticker in Passport ("VISTO / VISA PORTUGAL PRT"):
+                    - Check validity dates ("VÁLIDO PARA / FROM ... UNTIL ...").
+                    - Must be unexpired relative to {today_str}.
+                    - Name on the visa must match "{registered_name}".
+               - If any of these 4 documents is present, valid, and unexpired:
+                 * Set "residence_permit_valid": true.
+               - If none of these documents is provided, or if the permit/visa is expired:
+                 * Set "residence_permit_valid": false.
+                 * Force status to "REJECTED" or "MANUAL_REVIEW".
+                 * "reason" must explicitly state in English: "Foreign passport requires a valid CPLP certificate, Manifestação de Interesse, AIMA receipt, or unexpired Portuguese visa."
+                 * "next_action" must state: "Request valid AIMA receipt, CPLP certificate, or unexpired visa".
+            5. BANK / IBAN PROOF POLICY (STRICT):
+                - The bank document (bank certificate, app screenshot, statement) MUST clearly display BOTH:
+                1. The full account holder name (must match "{registered_name}").
+                2. The complete IBAN number (must match the registered IBAN "{registered_iban}").
+                - CRITICAL ATM / MULTIBANCO RECEIPT RULE:
+                * ATM receipts ("talão Multibanco / comprovativo de multibanco") that only show the IBAN without the technician's name are INVALID.
+                - IF the document lacks the holder's name, or the name does NOT match "{registered_name}", OR the IBAN numbers do not match:
+                * Force "bank_details_match": false.
+                * Force "iban_number_match": false.
+                * Force status to "REJECTED".
+                * Set "reason" explicitly stating if the name is missing/mismatched or if the IBAN digits differ.
+                * Set "next_action" to: "Request valid bank document with account holder name and IBAN".
+            6. PORTUGUESE NIF (9 digits): Must match "{registered_nif}".
+            7. CRIMINAL RECORD (PT) - EVALUATION RULES:
+               - First, inspect what document was actually submitted for "criminal_record":
+                 a) If the document is NOT a Portuguese Criminal Record certificate (e.g., technician uploaded a utility bill, proof of address, ID photo, blank page, or wrong document):
+                    * Set "criminal_record_valid": false.
+                    * Set "criminal_record_is_clean": true (DO NOT accuse the technician of having convictions/crimes).
+                    * "reason" must simply state: "Submitted document is not a Portuguese Criminal Record certificate (uploaded wrong document)".
+                    * "next_action": "Request valid Portuguese Criminal Record".
+                 b) If the document IS an official Portuguese DGAJ Criminal Record:
+                    * Check expiration: Must be <= 90 days old from {today_str}. If older: set "criminal_record_valid": false, "criminal_record_is_clean": true, reason: "Criminal record expired".
+                    * Check contents:
+                      - If it clearly states "NADA CONSTA": set "criminal_record_valid": true, "criminal_record_is_clean": true.
+                      - ONLY IF IT EXPLICITLY LISTS CHARGES, CRIMES, OR ACTIVE CONVICTIONS: set "criminal_record_valid": false, "criminal_record_is_clean": false, "status": "REJECTED", "risk_level": "HIGH", and state the exact convictions in "reason".
+                 c) If no document was uploaded at all:
+                    * Set "criminal_record_valid": false, "criminal_record_is_clean": true.
+            8. ADDRESS PROOF: <= 6 months old relative to {today_str}.
 
             DECISION:
             - "status": "APPROVED|REJECTED|MANUAL_REVIEW".
-            - "reason": Explanation in ENGLISH.
-            - "next_action": Recommendation in ENGLISH.
+            - "reason": Explanation strictly in ENGLISH.
+            - "next_action": Recommendation strictly in ENGLISH (Must include "Need to call this technician to check if they speak PT or ES" if non-native speaker of both languages).
 
             Return ONLY a JSON matching this exact structure:
             {{
@@ -289,9 +372,11 @@ def verify():
                 "iban_is_official": true|false,
                 "address_valid": true|false,
                 "criminal_record_valid": true|false,
-                "criminal_record_is_clean": true|false
+                "criminal_record_is_clean": true|false,
+                "language_check_required": true|false
               }},
               "extracted_data": {{
+                "detected_nationality": "...",
                 "detected_id_type": "PASSPORT|CITIZEN_CARD|RESIDENCE_CARD|UNKNOWN",
                 "name_on_address_proof": "...",
                 "name_on_criminal_record": "...",
@@ -347,7 +432,7 @@ def verify():
         for attempt in range(3):
             try:
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-3.8-flash",
                     contents=contents,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",

@@ -6,7 +6,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         "Content-Type": "application/json",
         "ngrok-skip-browser-warning": "true"
       },
-      body: JSON.stringify(request.payload)
+      body: JSON.stringify({
+        ...request.payload,
+        forced_country: "PT"
+      })
     })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
